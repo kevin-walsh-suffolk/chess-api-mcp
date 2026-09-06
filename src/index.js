@@ -1,6 +1,6 @@
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CHUNK = 45; // 45 moves needs 46 evaluations, under the free plan's 50 subrequests per invocation
-const TOOL = { name: "review_game", description: "Review a chess game. Paste a PGN copied from Chess.com or Lichess; returns one row per move labelled Best/Good/Inaccuracy/Mistake/Miss/Blunder with the eval lost, the better move, and the better line. Long games come back in parts: if the reply has a non-null 'next', call again with 'from' set to it and join the rows. Render the joined rows as an interactive move-by-move browser.", inputSchema: { type: "object", properties: { pgn: { type: "string" }, from: { type: "number" }, depth: { type: "number" } }, required: ["pgn"] } };
+const TOOL = { name: "review_game", description: "Review a chess game. Paste a PGN copied from Chess.com or Lichess; returns one row per move labelled Best/Good/Inaccuracy/Mistake/Miss/Blunder with the eval lost, the better move, and the better line. Long games come back in parts: if the reply has a non-null 'next', call again with 'from' set to it and join the rows; 'summary' counts only the part returned, so add the parts up. Render the joined rows as an interactive move-by-move browser.", inputSchema: { type: "object", properties: { pgn: { type: "string" }, from: { type: "number" }, depth: { type: "number" } }, required: ["pgn"] } };
 
 // Healthy replies take under a second, so a hung request is worth abandoning early and retrying.
 // Never throws: one unanswerable position leaves one row without a score, rather than losing the game.
@@ -24,10 +24,11 @@ async function review(pgn, from = 0, depth = 12) {
     return {
       n: Math.floor(i / 2) + 1, side: sign > 0 ? "w" : "b", move,
       class: !b.san ? "Unknown" : move.replace(/[+#]/g, "") === b.san.replace(/[+#]/g, "") ? "Best" : before * sign >= 10 && after * sign < 10 ? "Miss" : loss < 0.5 ? "Good" : loss < 1 ? "Inaccuracy" : loss < 2 ? "Mistake" : "Blunder",
-      loss: +loss.toFixed(2), best: b.san, line: (b.continuationArr || []).slice(0, 6), eval: after, fen: pos[k + 1]?.fen,
+      loss: +loss.toFixed(2), best: b.san, lineUci: (b.continuationArr || []).slice(0, 6), eval: after, fen: pos[k + 1]?.fen,
     };
   });
-  return { rows, next: from + CHUNK < moves.length ? from + CHUNK : null };
+  const tally = (t) => { const r = rows.filter((x) => x.side === t); return { moves: r.length, avgLoss: +(r.reduce((a, x) => a + x.loss, 0) / (r.length || 1)).toFixed(2), ...r.reduce((m, x) => ((m[x.class] = (m[x.class] || 0) + 1), m), {}) }; };
+  return { rows, depth, summary: { w: tally("w"), b: tally("b") }, next: from + CHUNK < moves.length ? from + CHUNK : null };
 }
 
 export default {
