@@ -6,7 +6,7 @@ const TOOL = { name: "review_game", description: "Review a chess game. Paste a P
 // Never throws: one unanswerable position leaves one row without a score, rather than losing the game.
 const ask = async (body, tries = 8) => {
   try { const r = await (await fetch("https://chess-api.com/v1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) })).json(); if (!r.fen && tries) throw 0; return r; }
-  catch (e) { return tries ? ask(body, tries - 1) : {}; }
+  catch (e) { if (!tries) return {}; await new Promise((r) => setTimeout(r, 600 * (9 - tries))); return ask(body, tries - 1); }
 };
 
 async function review(pgn, from = 0, depth = 12) {
@@ -14,13 +14,14 @@ async function review(pgn, from = 0, depth = 12) {
   const part = moves.slice(from, from + CHUNK);
   const jobs = part.map((_, k) => (from + k ? { input: moves.slice(0, from + k).join(" "), depth } : { fen: START, depth })).concat({ input: moves.slice(0, from + part.length).join(" "), depth });
   const pos = await Promise.all(jobs.map((j) => ask(j)));
-  const ev = (p, d) => (typeof p?.eval === "number" ? Math.max(-10, Math.min(10, p.eval)) : d);
+  const ev = pos.map((p) => (typeof p?.eval === "number" ? Math.max(-10, Math.min(10, p.eval)) : null));
+  ev.forEach((e, k) => { if (e === null) ev[k] = k ? ev[k - 1] : 0; }); // a gap inherits the last score, never invents a loss
   const rows = part.map((move, k) => {
     const i = from + k, b = pos[k], sign = i % 2 === 0 ? 1 : -1;
-    const before = ev(b, 0), after = ev(pos[k + 1], before), loss = Math.max(0, (before - after) * sign);
+    const before = ev[k], after = ev[k + 1], loss = Math.max(0, (before - after) * sign);
     return {
       n: Math.floor(i / 2) + 1, side: sign > 0 ? "w" : "b", move,
-      class: move.replace(/[+#]/g, "") === (b.san || "").replace(/[+#]/g, "") ? "Best" : before * sign >= 10 && after * sign < 10 ? "Miss" : loss < 0.5 ? "Good" : loss < 1 ? "Inaccuracy" : loss < 2 ? "Mistake" : "Blunder",
+      class: !b.san ? "Unknown" : move.replace(/[+#]/g, "") === b.san.replace(/[+#]/g, "") ? "Best" : before * sign >= 10 && after * sign < 10 ? "Miss" : loss < 0.5 ? "Good" : loss < 1 ? "Inaccuracy" : loss < 2 ? "Mistake" : "Blunder",
       loss: +loss.toFixed(2), best: b.san, line: (b.continuationArr || []).slice(0, 6), eval: after, fen: pos[k + 1]?.fen,
     };
   });
