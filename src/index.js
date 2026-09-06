@@ -13,7 +13,8 @@ async function review(pgn, from = 0, depth = 12) {
   const moves = pgn.replace(/\[[^\]]*\]|\{[^}]*\}|\d+\.+|\$\d+|[?!]+/g, " ").match(/[a-hKQRBNO][^\s]*/g) || [];
   const part = moves.slice(from, from + CHUNK);
   const jobs = part.map((_, k) => (from + k ? { input: moves.slice(0, from + k).join(" "), depth } : { fen: START, depth })).concat({ input: moves.slice(0, from + part.length).join(" "), depth });
-  const pos = await Promise.all(jobs.map((j) => ask(j)));
+  const pos = [await ask(jobs[0])]; // one request alone first: it is the cold burst of six that gets dropped
+  pos.push(...await Promise.all(jobs.slice(1).map((j) => ask(j))));
   for (let k = 0; k < pos.length; k++) if (!pos[k].fen) pos[k] = await ask(jobs[k]); // retry stragglers one at a time, off the burst
   const ev = pos.map((p) => (typeof p?.eval === "number" ? Math.max(-10, Math.min(10, p.eval)) : null));
   ev.forEach((e, k) => { if (e === null) ev[k] = k ? ev[k - 1] : 0; }); // a gap inherits the last score, never invents a loss
