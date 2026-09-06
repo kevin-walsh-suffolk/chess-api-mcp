@@ -3,7 +3,7 @@ const CHUNK = 45; // stay under the free plan's 50 subrequests per invocation
 const TOOL = { name: "review_game", description: "Review a chess game. Paste a PGN copied from Chess.com or Lichess; returns one row per move labelled Best/Good/Inaccuracy/Mistake/Miss/Blunder with the eval lost, the better move, and the better line. Render it as an interactive move-by-move browser.", inputSchema: { type: "object", properties: { pgn: { type: "string" }, depth: { type: "number" } }, required: ["pgn"] } };
 
 const ask = async (body, tries = 4) => {
-  try { return await (await fetch("https://chess-api.com/v1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) })).json(); }
+  try { const r = await (await fetch("https://chess-api.com/v1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) })).json(); if (!r.fen && tries) throw 0; return r; }
   catch (e) { if (!tries) throw e; return ask(body, tries - 1); }
 };
 
@@ -11,7 +11,8 @@ async function review(pgn, depth = 12, url) {
   const moves = pgn.replace(/\[[^\]]*\]|\{[^}]*\}|\d+\.+|\$\d+|[?!]+/g, " ").match(/[a-hKQRBNO][^\s]*/g) || [];
   const jobs = moves.map((_, i) => (i ? { input: moves.slice(0, i).join(" "), depth } : { fen: START, depth })).concat({ input: moves.join(" "), depth });
   const chunks = Array.from({ length: Math.ceil(jobs.length / CHUNK) }, (_, i) => jobs.slice(i * CHUNK, i * CHUNK + CHUNK));
-  const pos = (await Promise.all(chunks.map((chunk) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chunk }) }).then((r) => r.json())))).flat();
+  const pos = []; // one chunk at a time: concurrency above ~6 gains no speed and multiplies timeouts
+  for (const chunk of chunks) pos.push(...await (await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chunk }) })).json());
   const ev = (p, d) => (typeof p?.eval === "number" ? Math.max(-10, Math.min(10, p.eval)) : d);
   return moves.map((move, i) => {
     const b = pos[i], sign = i % 2 === 0 ? 1 : -1;

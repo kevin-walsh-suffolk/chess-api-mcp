@@ -8,4 +8,4 @@ Paste a chess game, get a Chess.com-style review. MCP server on Cloudflare Worke
 
 chess-api.com scores one position per request, so a 92-move game needs ~93 of them. The worker
 splits the game and calls itself once per 45 positions, so each invocation stays under the free
-plan's 50-subrequest limit. A full game takes ~20s.
+plan's 50-subrequest limit. Chunks are fetched one at a time; a full game takes a few seconds, longer when the site is busy.
