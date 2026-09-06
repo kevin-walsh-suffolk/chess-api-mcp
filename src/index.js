@@ -2,9 +2,11 @@ const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CHUNK = 45; // 45 moves needs 46 evaluations, under the free plan's 50 subrequests per invocation
 const TOOL = { name: "review_game", description: "Review a chess game. Paste a PGN copied from Chess.com or Lichess; returns one row per move labelled Best/Good/Inaccuracy/Mistake/Miss/Blunder with the eval lost, the better move, and the better line. Long games come back in parts: if the reply has a non-null 'next', call again with 'from' set to it and join the rows. Render the joined rows as an interactive move-by-move browser.", inputSchema: { type: "object", properties: { pgn: { type: "string" }, from: { type: "number" }, depth: { type: "number" } }, required: ["pgn"] } };
 
-const ask = async (body, tries = 4) => {
-  try { const r = await (await fetch("https://chess-api.com/v1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) })).json(); if (!r.fen && tries) throw 0; return r; }
-  catch (e) { if (!tries) throw e; return ask(body, tries - 1); }
+// Healthy replies take under a second, so a hung request is worth abandoning early and retrying.
+// Never throws: one unanswerable position leaves one row without a score, rather than losing the game.
+const ask = async (body, tries = 8) => {
+  try { const r = await (await fetch("https://chess-api.com/v1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) })).json(); if (!r.fen && tries) throw 0; return r; }
+  catch (e) { return tries ? ask(body, tries - 1) : {}; }
 };
 
 async function review(pgn, from = 0, depth = 12) {
