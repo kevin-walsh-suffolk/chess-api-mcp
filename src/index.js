@@ -4,9 +4,9 @@ const TOOL = { name: "review_game", description: "Review a chess game. Paste a P
 
 // Healthy replies take under a second, so a hung request is worth abandoning early and retrying.
 // Never throws: one unanswerable position leaves one row without a score, rather than losing the game.
-const ask = async (body, tries = 8) => {
+const ask = async (body, tries = 4) => {
   try { const r = await (await fetch("https://chess-api.com/v1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) })).json(); if (!r.fen && tries) throw 0; return r; }
-  catch (e) { if (!tries) return {}; await new Promise((r) => setTimeout(r, 600 * (9 - tries))); return ask(body, tries - 1); }
+  catch (e) { return tries ? ask(body, tries - 1) : {}; }
 };
 
 async function review(pgn, from = 0, depth = 12) {
@@ -14,6 +14,7 @@ async function review(pgn, from = 0, depth = 12) {
   const part = moves.slice(from, from + CHUNK);
   const jobs = part.map((_, k) => (from + k ? { input: moves.slice(0, from + k).join(" "), depth } : { fen: START, depth })).concat({ input: moves.slice(0, from + part.length).join(" "), depth });
   const pos = await Promise.all(jobs.map((j) => ask(j)));
+  for (let k = 0; k < pos.length; k++) if (!pos[k].fen) pos[k] = await ask(jobs[k]); // retry stragglers one at a time, off the burst
   const ev = pos.map((p) => (typeof p?.eval === "number" ? Math.max(-10, Math.min(10, p.eval)) : null));
   ev.forEach((e, k) => { if (e === null) ev[k] = k ? ev[k - 1] : 0; }); // a gap inherits the last score, never invents a loss
   const rows = part.map((move, k) => {
