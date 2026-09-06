@@ -1,27 +1,20 @@
 import { Chess } from "chess.js";
 
+const CHUNK = 45; // stay under the free plan's 50 subrequests per invocation
 const TOOL = { name: "review_game", description: "Review a chess game. Paste a PGN copied from Chess.com or Lichess; returns one row per move labelled Best/Good/Inaccuracy/Mistake/Miss/Blunder with the eval lost, the better move, and the better line. Render it as an interactive move-by-move browser.", inputSchema: { type: "object", properties: { pgn: { type: "string" }, depth: { type: "number" } }, required: ["pgn"] } };
 
-async function review(pgn, depth = 12) {
+const ask = async (fen, depth, tries = 4) => {
+  try { return await (await fetch("https://chess-api.com/v1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fen, depth }), signal: AbortSignal.timeout(20000) })).json(); }
+  catch (e) { if (!tries) throw e; return ask(fen, depth, tries - 1); }
+};
+
+async function review(pgn, depth = 12, url) {
   const game = new Chess();
   game.loadPgn(pgn);
   const hist = game.history({ verbose: true });
   const fens = hist.map((m) => m.before).concat(game.fen());
-  const ws = (await fetch("https://chess-api.com/v1", { headers: { Upgrade: "websocket" } })).webSocket;
-  ws.accept();
-  const pos = await new Promise((resolve, reject) => {
-    const out = [];
-    ws.addEventListener("message", (e) => {
-      const d = JSON.parse(e.data);
-      if (d.type !== "bestmove") return;
-      out.push(d);
-      if (out.length < fens.length) ws.send(JSON.stringify({ fen: fens[out.length], depth }));
-      else resolve(out);
-    });
-    ws.addEventListener("close", () => reject(new Error("chess-api closed the connection early")));
-    ws.send(JSON.stringify({ fen: fens[0], depth }));
-  });
-  ws.close();
+  const chunks = Array.from({ length: Math.ceil(fens.length / CHUNK) }, (_, i) => fens.slice(i * CHUNK, i * CHUNK + CHUNK));
+  const pos = (await Promise.all(chunks.map((chunk) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chunk, depth }) }).then((r) => r.json())))).flat();
   const ev = (p, d) => (typeof p?.eval === "number" ? Math.max(-10, Math.min(10, p.eval)) : d);
   return hist.map((m, i) => {
     const b = pos[i], sign = m.color === "w" ? 1 : -1;
@@ -37,11 +30,13 @@ async function review(pgn, depth = 12) {
 export default {
   async fetch(req) {
     if (req.method !== "POST") return new Response(null, { status: 405 });
-    const { id, method, params } = await req.json();
+    const body = await req.json();
+    if (body.chunk) return Response.json(await Promise.all(body.chunk.map((f) => ask(f, body.depth))));
+    const { id, method, params } = body;
     if (id === undefined) return new Response(null, { status: 202 });
     const result = method === "initialize" ? { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "chess", version: "1" } }
       : method === "tools/list" ? { tools: [TOOL] }
-      : { content: [{ type: "text", text: JSON.stringify(await review(params.arguments.pgn, params.arguments.depth)) }] };
+      : { content: [{ type: "text", text: JSON.stringify(await review(params.arguments.pgn, params.arguments.depth, req.url)) }] };
     return Response.json({ jsonrpc: "2.0", id, result });
   },
 };
